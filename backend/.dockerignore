@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+data/
+tests/
+uv-sync.log
+uv-sync.err
+*.log
+.env
+.env.*
+*.pem
+*.key

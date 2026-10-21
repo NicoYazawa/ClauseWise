@@ -1,0 +1,258 @@
+# ClauseWise 全栈编排：MySQL + Redis + Elasticsearch(+IK) + API + Celery Worker/Beat + 前端(Nginx)
+name: clausewise
+
+x-backend-env: &backend-env
+  MYSQL_HOST: mysql
+  MYSQL_PORT: "3306"
+  ES_URL: http://es:9200
+  ES_USERNAME: elastic
+  ES_PASSWORD: ${ES_PASSWORD:?ES_PASSWORD must be set in .env}
+  REDIS_URL: redis://redis:6379/0
+  REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+  PREFLIGHT_STRICT: "false"
+  STORAGE_ROOT: /app/data
+  TZ: Asia/Shanghai
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: clausewise-mysql
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    ports:
+      # 数据面端口仅绑定本机回环，避免数据库绕过应用直接暴露到局域网
+      - "127.0.0.1:${MYSQL_HOST_PORT:-13306}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks: [cw]
+
+  redis:
+    image: redis:7-alpine
+    container_name: clausewise-redis
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}"]
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-16379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [cw]
+
+  es:
+    build:
+      context: ./docker/es
+      dockerfile: Dockerfile
+    container_name: clausewise-es
+    restart: unless-stopped
+    environment:
+      - node.name=clausewise-es
+      - discovery.type=single-node
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=false
+      - ELASTIC_PASSWORD=${ES_PASSWORD:?ES_PASSWORD must be set in .env}
+      - bootstrap.memory_lock=true
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "127.0.0.1:${ES_HOST_PORT:-19200}:9200"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -u \"elastic:$$ELASTIC_PASSWORD\" http://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    networks: [cw]
+
+  # 模型网关：所有 LLM 调用的唯一出口（主备 fallback / 熔断 / 限流 / 调用日志）
+  # 应用侧通过 LLM_BASE_URL=http://litellm:4000/v1 接入，业务代码零改动
+  litellm:
+    build:
+      context: ./docker/litellm
+    image: clausewise-litellm:local
+    container_name: clausewise-litellm
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      # 仅绑定本机，避免网关成为绕过应用 RBAC 的旁路
+      - "127.0.0.1:${LITELLM_HOST_PORT:-14000}:4000"
+    volumes:
+      - ./docker/litellm/config.yaml:/app/config.yaml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=3).status==200 else 1)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    networks: [cw]
+
+  # 指标抓取与阈值告警（抓取 api /metrics 与 litellm /metrics）
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: clausewise-prometheus
+    restart: unless-stopped
+    env_file: [.env]
+    # 用 shell 启动：先把 LITELLM_MASTER_KEY 写成 credentials_file 再拉起 prometheus
+    entrypoint: ["/bin/sh", "/etc/prometheus/entrypoint.sh"]
+    volumes:
+      - ./docker/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_HOST_PORT:-19090}:9090"
+    depends_on:
+      api:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    networks: [cw]
+
+  # 告警分发：把 Prometheus 告警回调给应用，由应用转成企微/钉钉/飞书消息
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: clausewise-alertmanager
+    restart: unless-stopped
+    env_file: [.env]
+    entrypoint: ["/bin/sh", "/etc/alertmanager/entrypoint.sh"]
+    volumes:
+      - ./docker/alertmanager:/etc/alertmanager:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_HOST_PORT:-19093}:9093"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [cw]
+
+  api:
+    build:
+      context: ./backend
+      args:
+        # 容器网络无法直连官方 PyPI 时，在 .env 设置 UV_INDEX_URL 指向可用镜像
+        UV_INDEX_URL: ${UV_INDEX_URL:-}
+    image: clausewise-backend:local
+    container_name: clausewise-api
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      <<: *backend-env
+      INIT_DB: "1"
+    ports:
+      # 仅绑定本机；对外访问统一走 frontend/nginx 反代，避免绕过 RBAC 直连
+      - "127.0.0.1:${API_HOST_PORT:-18000}:8000"
+    volumes:
+      - api-data:/app/data
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      es:
+        condition: service_healthy
+      # 只保证启动顺序，不阻塞：网关异常时应用仍可启动（预检会把模型项标为 FAIL 并降级告警）
+      litellm:
+        condition: service_started
+    networks: [cw]
+
+  worker:
+    build:
+      context: ./backend
+    image: clausewise-backend:local
+    container_name: clausewise-worker
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      <<: *backend-env
+      WAIT_TABLES: "1"
+      # 审查/解析在 worker 执行，需单独暴露指标端口（prefork 多进程用共享目录聚合）
+      WORKER_METRICS_PORT: "9100"
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prom
+    command:
+      - celery
+      - -A
+      - app.tasks.celery_app
+      - worker
+      - --loglevel=info
+      - --concurrency=4
+      - -Q
+      - parse,review,index
+    # worker/beat 不监听 HTTP，禁用继承自 Dockerfile 的 HTTP 健康检查
+    healthcheck:
+      disable: true
+    volumes:
+      - api-data:/app/data
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [cw]
+
+  beat:
+    build:
+      context: ./backend
+    image: clausewise-backend:local
+    container_name: clausewise-beat
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      <<: *backend-env
+      WAIT_TABLES: "1"
+    command: ["celery", "-A", "app.tasks.celery_app", "beat", "--loglevel=info"]
+    healthcheck:
+      disable: true
+    volumes:
+      - api-data:/app/data
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [cw]
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: clausewise-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_HOST_PORT:-15173}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [cw]
+
+volumes:
+  mysql-data:
+  redis-data:
+  es-data:
+  api-data:
+  prometheus-data:
+  alertmanager-data:
+
+networks:
+  cw:
+    driver: bridge

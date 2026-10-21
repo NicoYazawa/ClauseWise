@@ -1,0 +1,81 @@
+# ClauseWise 模型网关配置
+#
+# 约定：
+#   - 应用侧只认这里的 model_name（别名）：LLM_MODEL / LLM_VISION_MODEL / EMBEDDING_MODEL
+#   - 换真实厂商、调参、加备模型都只改本文件，应用代码与前端无感
+#   - 所有厂商统一用 openai/ 前缀 + 显式 api_base（OpenAI 兼容协议），
+#     避免 LiteLLM 内置模型映射替我们改参数（例如擅自丢弃 temperature）
+#
+# 修改本文件后重启：docker compose restart litellm
+
+model_list:
+  # ===== 合同审查（主）=====
+  - model_name: contract-review
+    litellm_params:
+      model: openai/deepseek-v4-flash-vision-exp
+      api_base: https://api.deepseek.com
+      api_key: os.environ/DEEPSEEK_API_KEY
+      timeout: 60          # 必须小于应用侧 120s，给 fallback 留出窗口
+      max_retries: 1
+
+  # ===== 合同审查（备）：百炼 qwen-plus =====
+  # 主模型 401/限流/5xx/超时时自动接管，保证审查任务不整单失败
+  - model_name: contract-review-backup
+    litellm_params:
+      model: openai/qwen-plus
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key: os.environ/DASHSCOPE_API_KEY
+      timeout: 60
+      max_retries: 0
+
+  # ===== 扫描件 OCR（视觉通道）=====
+  # 迁移期沿用原视觉模型，行为与改造前完全一致；
+  # 如需换 qwen-vl-max：把 model 改为 openai/qwen-vl-max，api_base 改为百炼兼容地址即可
+  - model_name: contract-ocr
+    litellm_params:
+      model: openai/deepseek-v4-flash-vision-exp
+      api_base: https://api.deepseek.com
+      api_key: os.environ/DEEPSEEK_API_KEY
+      timeout: 90
+      max_retries: 1
+
+  # ===== 向量（预留，默认不启用）=====
+  # 应用侧仍直连百炼：向量模型走网关没有治理收益（无 fallback、成本占比极低），
+  # 却会引入「维度/向量空间不一致导致检索静默失效」的风险，故暂不切换。
+  - model_name: contract-embed
+    litellm_params:
+      model: openai/text-embedding-v4
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key: os.environ/DASHSCOPE_API_KEY
+
+  # ===== 故障演练探针 =====
+  # 故意指向无效模型与密钥，用于验证 fallback 链路是否真的生效：
+  #   curl -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H "Content-Type: application/json" \
+  #        -d '{"model":"drill-broken","messages":[{"role":"user","content":"ping"}]}' \
+  #        http://localhost:14000/v1/chat/completions
+  # 返回体 model 字段应为 qwen-plus 而不是报错
+  - model_name: drill-broken
+    litellm_params:
+      model: openai/not-a-real-model
+      api_base: https://api.deepseek.com
+      api_key: sk-invalid-for-drill
+      timeout: 20
+      max_retries: 0
+
+router_settings:
+  fallbacks:
+    - contract-review: [contract-review-backup]
+    - drill-broken: [contract-review-backup]
+  num_retries: 1            # 与应用侧 retries=2 叠加后最坏 4 次，避免放大成本
+  timeout: 60
+  allowed_fails: 3          # 连续失败 3 次后熔断
+  cooldown_time: 60         # 熔断冷却 60s，期间直接走备模型
+
+litellm_settings:
+  # 厂商不支持的参数（response_format / dimensions 等）自动丢弃，
+  # 避免换厂商时报 400；应用侧另有 JSON 模式降级兜底
+  drop_params: true
+  # 合规关键：不记录 prompt 与响应正文（合同原文不出主库）
+  turn_off_message_logging: true
+  # 暴露 Prometheus 指标（/metrics）：请求数、延迟、token、失败率、fallback 次数
+  callbacks: ["prometheus"]

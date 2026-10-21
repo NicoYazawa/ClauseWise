@@ -1,0 +1,92 @@
+[project]
+name = "clausewise-backend"
+version = "1.0.0"
+description = "AI 智能合同合规审查平台 · 后端（FastAPI + LangGraph + ES + Celery）"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    # Web 框架
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+    # 数据层
+    "sqlalchemy>=2.0",
+    "pymysql>=1.1",
+    "cryptography>=42.0",
+    # 配置与校验
+    "pydantic>=2.7",
+    "pydantic-settings>=2.2",
+    # 安全
+    "bcrypt>=4.1",
+    "pyjwt>=2.8",
+    # 检索
+    "elasticsearch>=9.0,<10",
+    # 异步任务
+    "celery>=5.3",
+    "redis>=5.0",
+    # LLM
+    "openai>=2.0",
+    # 文档处理
+    "pymupdf>=1.24",
+    "python-docx>=1.1",
+    "openpyxl>=3.1",
+    "reportlab>=4.1",
+    "python-dateutil>=2.9",
+    # 工具
+    "simpleeval>=0.9.13",
+    "loguru>=0.7",
+    # 可观测性（应用侧指标，供 Prometheus 抓取）
+    "prometheus-client>=0.21",
+    # Multi-agent 编排：LangGraph / LangChain 必须 1.0+
+    "langgraph>=1.0,<2",
+    "langchain>=1.0,<2",
+    "langchain-core>=1.0,<2",
+    "langchain-openai>=1.0,<2",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14",
+    "pytest>=8.0",
+    "pytest-asyncio>=1.0",
+    "mypy>=1.14",
+    "pytest-cov>=7.1.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+exclude = [".venv", "data", "__pycache__"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+ignore = [
+    "E501",    # 行宽由 formatter 控制
+    "B008",    # FastAPI Depends()/File() 默认值是惯用法
+    "SIM108",  # 三元表达式可读性偏好
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q --cov=app --cov-report=term-missing --cov-report=xml:coverage.xml"
+pythonpath = ["."]
+
+[tool.coverage.run]
+source = ["app"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 90
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_unused_ignores = false
+exclude = ["data/", "\\.venv/"]

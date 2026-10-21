@@ -1,0 +1,64 @@
+# 阈值告警规则：触发后经 Alertmanager 回调应用 /api/v1/alerts/prometheus，
+# 再由应用转成企业微信 / 钉钉 / 飞书消息（复用 app/core/alerting.py）。
+groups:
+  - name: clausewise-slo
+    rules:
+      - alert: ApiDown
+        expr: up{job="clausewise-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: 后端 API 不可达
+          description: 连续 2 分钟抓取不到 {{ $labels.instance }} 的 /metrics，审查与问答均不可用
+
+      - alert: ReviewFailureRatioHigh
+        expr: |
+          sum(rate(clausewise_review_tasks_total{status="failed"}[10m]))
+          /
+          clamp_min(sum(rate(clausewise_review_tasks_total[10m])), 0.001) > 0.2
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: AI 审查失败率超过 20%
+          description: 近 10 分钟失败率 {{ $value | humanizePercentage }}，请检查模型网关与密钥
+
+      - alert: ParseFailureSpike
+        expr: increase(clausewise_parse_tasks_total{status="failed"}[15m]) >= 3
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: 合同解析连续失败
+          description: 15 分钟内解析失败 {{ $value }} 次，可能是文件格式或 OCR 通道异常
+
+      - alert: LlmCallErrorRateHigh
+        expr: |
+          sum(rate(clausewise_llm_calls_total{outcome="error"}[10m]))
+          /
+          clamp_min(sum(rate(clausewise_llm_calls_total[10m])), 0.001) > 0.3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 模型调用错误率超过 30%
+          description: 近 10 分钟错误率 {{ $value | humanizePercentage }}，主备切换可能已触发
+
+      - alert: GatewayPrimaryCooldown
+        expr: max(litellm_deployment_state) == 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 模型网关主模型持续熔断
+          description: 有部署处于 cooldown 状态超过 5 分钟，请求已在走备用模型或全部失败
+
+      - alert: GatewayScrapeDown
+        expr: up{job="clausewise-litellm"} == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: 模型网关不可达
+          description: 抓取 litellm:4000/metrics 失败，所有 AI 能力将不可用

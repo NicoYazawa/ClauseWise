@@ -1,0 +1,105 @@
+{
+  "description": "独立标注的规则层评测样本（用于评估漏报/误报/引用准确性；不依赖实现细节标注）。每个样本标注期望的确定性规则发现：expect 全部命中=零漏报；产出中未标注的发现=误报。",
+  "samples": [
+    {
+      "id": "penalty-bound-50",
+      "contract_type": "sales",
+      "clauses": [
+        {"clause_no": "第一条", "clause_type": "违约责任", "content": "任何一方违约的，违约金为合同总价的 50%。"},
+        {"clause_no": "第二条", "clause_type": "争议解决", "content": "争议解决：协商不成的，提交合同签订地仲裁委员会仲裁。"}
+      ],
+      "expect": [
+        {"risk_type": "权责不对等", "issue_contains": ["违约金比例 50%"], "legal_basis_contains": ["第五百八十五条", "64"]}
+      ]
+    },
+    {
+      "id": "prepayment-not-penalty-audit-counterexample",
+      "contract_type": "purchase",
+      "clauses": [
+        {"clause_no": "第一条", "clause_type": "付款", "content": "预付款50%，逾期违约金为合同金额5%。发生争议提交仲裁。"}
+      ],
+      "expect": []
+    },
+    {
+      "id": "penalty-under-threshold",
+      "contract_type": "sales",
+      "clauses": [
+        {"clause_no": "第一条", "clause_type": "违约责任", "content": "违约金为合同总价的 20%。"},
+        {"clause_no": "第二条", "clause_type": "争议解决", "content": "争议解决：诉讼解决。"}
+      ],
+      "expect": []
+    },
+    {
+      "id": "late-fee-bound-40",
+      "contract_type": "purchase",
+      "clauses": [
+        {"clause_no": "第一条", "clause_type": "付款", "content": "逾期付款的，每逾期一日按未付款项的万分之五支付滞纳金；累计滞纳金为合同总价的 40%。"},
+        {"clause_no": "第二条", "clause_type": "争议解决", "content": "争议解决：提交仲裁。"}
+      ],
+      "expect": [
+        {"risk_type": "权责不对等", "issue_contains": ["违约金比例 40%"], "legal_basis_contains": ["第五百八十五条"]}
+      ]
+    },
+    {
+      "id": "compensation-cap-not-penalty",
+      "contract_type": "sales",
+      "clauses": [
+        {"clause_no": "第一条", "clause_type": "赔偿", "content": "因违约造成损失的，赔偿为合同总价的 50%。"},
+        {"clause_no": "第二条", "clause_type": "争议解决", "content": "争议解决：诉讼解决。"}
+      ],
+      "expect": []
+    },
+    {
+      "id": "injury-exclusion-void",
+      "contract_type": "labor",
+      "clauses": [
+        {"clause_no": "第一条", "clause_type": "免责", "content": "乙方发生人身伤亡事故的，与甲方无关，甲方不承担任何责任。"},
+        {"clause_no": "第二条", "clause_type": "争议解决", "content": "争议解决：诉讼解决。"}
+      ],
+      "expect": [
+        {"risk_type": "违法无效", "issue_contains": ["人身损害"], "legal_basis_contains": ["第五百零六条"]}
+      ]
+    },
+    {
+      "id": "unilateral-termination-power",
+      "contract_type": "lease",
+      "clauses": [
+        {"clause_no": "第一条", "clause_type": "解除", "content": "甲方有权随时退回租赁物、解除合同且不承担任何责任。"},
+        {"clause_no": "第二条", "clause_type": "争议解决", "content": "争议解决：诉讼解决。"}
+      ],
+      "expect": [
+        {"risk_type": "权责不对等", "issue_contains": ["单方"], "legal_basis_contains": ["第四百九十七条"]}
+      ]
+    },
+    {
+      "id": "unilateral-interpretation",
+      "contract_type": "purchase",
+      "clauses": [
+        {"clause_no": "第一条", "clause_type": "解释", "content": "本合同条款由甲方单方解释认定。"},
+        {"clause_no": "第二条", "clause_type": "争议解决", "content": "争议解决：诉讼解决。"}
+      ],
+      "expect": [
+        {"risk_type": "权责不对等", "issue_contains": ["单方"], "legal_basis_contains": ["第四百九十七条"]}
+      ]
+    },
+    {
+      "id": "missing-dispute-resolution",
+      "contract_type": "purchase",
+      "clauses": [
+        {"clause_no": "第一条", "clause_type": "付款", "content": "甲方应于收到发票后三十日内支付全部价款。"}
+      ],
+      "expect": [
+        {"risk_type": "条款缺失", "issue_contains": ["争议解决"], "legal_basis_contains": ["必备条款"]}
+      ]
+    },
+    {
+      "id": "clean-contract-no-findings",
+      "contract_type": "nda",
+      "clauses": [
+        {"clause_no": "第一条", "clause_type": "保密", "content": "乙方对甲方商业秘密承担保密义务，保密期限为三年。"},
+        {"clause_no": "第二条", "clause_type": "争议解决", "content": "争议解决：协商不成提交仲裁。"}
+      ],
+      "expect": []
+    }
+  ]
+}

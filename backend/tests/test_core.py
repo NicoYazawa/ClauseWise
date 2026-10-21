@@ -233,6 +233,19 @@ class TestAlerting:
         assert alerting.notify("t", "c", key="k") is True
         assert alerting.notify("t", "c", key="k") is False  # same key rate-limited within 5 minutes
 
+    @pytest.mark.parametrize("uptime", [0.0, 1.0, 299.0])
+    def test_notify_first_alert_after_boot_and_interval_boundary(self, enabled_settings, monkeypatch, uptime):
+        clock = [uptime]
+        posted = []
+        monkeypatch.setattr(alerting.time, "monotonic", lambda: clock[0])
+        monkeypatch.setattr(alerting, "_post", lambda url, payload: posted.append(payload))
+        assert alerting.notify("t", "c", key="boot") is True
+        clock[0] = uptime + 299.0
+        assert alerting.notify("t", "c", key="boot") is False
+        clock[0] = uptime + 300.0
+        assert alerting.notify("t", "c", key="boot") is True
+        assert len(posted) == 2
+
     def test_notify_different_key_not_limited(self, enabled_settings, monkeypatch):
         monkeypatch.setattr(alerting, "_post", lambda url, payload: None)
         assert alerting.notify("t", "c", key="k1") is True

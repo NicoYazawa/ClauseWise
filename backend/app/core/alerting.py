@@ -73,7 +73,8 @@ def notify(title: str, content: str, *, level: str = "error", key: str | None = 
     dedup = key or title
     now = time.monotonic()
     with _lock:
-        if now - _last_sent.get(dedup, 0.0) < settings.alert_min_interval_seconds:
+        last_sent = _last_sent.get(dedup)
+        if last_sent is not None and now - last_sent < settings.alert_min_interval_seconds:
             logger.info(f"alert suppressed by rate limit: {dedup}")
             return False
         _last_sent[dedup] = now
